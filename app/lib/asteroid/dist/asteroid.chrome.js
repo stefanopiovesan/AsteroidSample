@@ -867,12 +867,17 @@ Asteroid.prototype._tryResumeLogin = function () {
 Asteroid.prototype.createUser = function (usernameOrEmail, password, profile) {
 	var self = this;
 	var deferred = Q.defer();
-	var options = {
-		username: Asteroid.utils.isEmail(usernameOrEmail) ? undefined : usernameOrEmail,
-		email: Asteroid.utils.isEmail(usernameOrEmail) ? usernameOrEmail : undefined,
-		password: password,
-		profile: profile
-	};
+	var options;
+	if (typeof usernameOrEmail === "string") {
+		options = {
+			username: Asteroid.utils.isEmail(usernameOrEmail) ? undefined : usernameOrEmail,
+			email: Asteroid.utils.isEmail(usernameOrEmail) ? usernameOrEmail : undefined,
+			password: password,
+			profile: profile
+		};
+	} else if (typeof usernameOrEmail === "object") {
+		options = usernameOrEmail;
+	}
 	self.ddp.method("createUser", [options], function (err, res) {
 		if (err) {
 			self._emit("createUserError", err);
@@ -1046,10 +1051,10 @@ Asteroid.Set = Set;
 // Subscription class //
 ////////////////////////
 
-var Subscription = function (name, params, hash, asteroid) {
+var Subscription = function (name, params, fingerprint, asteroid) {
 	this._name = name;
 	this._params = params;
-	this._hash = hash;
+	this._fingerprint = fingerprint;
 	this._asteroid = asteroid;
 	// Subscription promises
 	this._ready = Q.defer();
@@ -1064,7 +1069,7 @@ Subscription.constructor = Subscription;
 
 Subscription.prototype.stop = function () {
 	this._asteroid.ddp.unsub(this.id);
-	delete this._asteroid._subscriptionsCache[this._hash];
+	delete this._asteroid._subscriptionsCache[this._fingerprint];
 };
 
 Subscription.prototype._onReady = function () {
@@ -1073,6 +1078,7 @@ Subscription.prototype._onReady = function () {
 
 Subscription.prototype._onStop = function () {
 	delete this._asteroid.subscriptions[this.id];
+	delete this._asteroid._subscriptionsCache[this._fingerprint];
 };
 
 Subscription.prototype._onError = function (err) {
@@ -1080,6 +1086,7 @@ Subscription.prototype._onError = function (err) {
 		this._ready.reject(err);
 	}
 	delete this._asteroid.subscriptions[this.id];
+	delete this._asteroid._subscriptionsCache[this._fingerprint];
 };
 
 
@@ -1094,23 +1101,41 @@ Asteroid.prototype.subscribe = function (name /* , param1, param2, ... */) {
 	// Collect arguments into array
 	var args = Array.prototype.slice.call(arguments);
 	// Hash the arguments to get a key for _subscriptionsCache
-	var hash = JSON.stringify(args);
+	var fingerprint = JSON.stringify(args);
 	// Only subscribe if there is no cached subscription
-	if (!this._subscriptionsCache[hash]) {
+	if (!this._subscriptionsCache[fingerprint]) {
 		// Get the parameters of the subscription
 		var params = args.slice(1);
-		var sub = new Subscription(name, params, hash, this);
-		this._subscriptionsCache[hash] = sub;
+		// Subscribe
+		var sub = new Subscription(
+			name,
+			params,
+			fingerprint,
+			this
+		);
+		this._subscriptionsCache[sub._fingerprint] = sub;
 		this.subscriptions[sub.id] = sub;
 	}
-	return this._subscriptionsCache[hash];
+	return this._subscriptionsCache[fingerprint];
 };
 
 Asteroid.prototype._reEstablishSubscriptions = function () {
 	var subs = this.subscriptions;
+	var oldSub;
+	var newSub;
 	for (var id in subs) {
 		if (subs.hasOwnProperty(id)) {
-			subs[id] = new Subscription(subs[id]._name, subs[id]._params, this);
+			oldSub = subs[id];
+			newSub = new Subscription(
+				oldSub._name,
+				oldSub._params,
+				oldSub._fingerprint,
+				this
+			);
+			delete this.subscriptions[oldSub.id];
+			delete this._subscriptionsCache[oldSub._fingerprint];
+			this.subscriptions[newSub.id] = newSub;
+			this._subscriptionsCache[newSub._fingerprint] = newSub;
 		}
 	}
 };
